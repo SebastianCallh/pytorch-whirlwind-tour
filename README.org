@@ -1,0 +1,273 @@
+#+TITLE: PyTorch whirlwind tour
+This README is more of a presentation with code examples on how PyTorch works.
+
+* PyTorch
+- On one hand a NumPy which an autograd system
+- On the other hand an object oriented
+
+* Autograd
+- As its core, PyTorch is an autograd system
+- PyTorch constructs the compute graph dynamically
+
+#+begin_src jupyter-python
+import torch
+
+x = torch.tensor([1.0, 2.0, 3.0])
+w = torch.randn(3, requires_grad=True)
+y = torch.dot(x, w)
+y.backward()
+print(w.grad)
+#+
+
+* Autograd
+- Autograd lets us write differentiable programs
+- We can fit these programs to data
+- PyTorch comes with many useful abstractions
+- Dense, Conv, Dropout, Embeddings, Attention etc.
+
+* Modules
+It is common to package programs in /modules/
+
+#+begin_src jupyter-python
+from torch import nn
+
+class CNN(nn.Module):  # derive from module
+
+    # Init all the sub modules
+    def __init__(self):
+        super(CNN, self).__init__()
+        self.conv1 = nn.Conv2d(1, 32, 3, 1)
+        self.conv2 = nn.Conv2d(32, 64, 3, 1)
+        self.dropout1 = nn.Dropout(0.25)
+        self.dropout2 = nn.Dropout(0.5)
+        self.fc1 = nn.Linear(9216, 128)
+        self.fc2 = nn.Linear(128, 10)
+
+    # define the forward pass
+    def forward(self, x):
+        x = self.conv1(x)
+        x = F.relu(x)
+        x = self.conv2(x)
+        x = F.relu(x)
+        x = F.max_pool2d(x, 2)
+        x = self.dropout1(x)
+        x = torch.flatten(x, 1)
+        x = self.fc1(x)
+        x = F.relu(x)
+        x = self.dropout2(x)
+        x = self.fc2(x)
+        output = F.log_softmax(x, dim=1)
+        return output
+#+end_src
+
+* Alternative
+- For simple things the OOP approach is clunky.
+- We can be more concise
+- We can mix and match
+
+#+begin_src jupyter-python
+cnn = nn.Sequential(
+    nn.Conv2d(1, 32, 3, 1),
+    nn.ReLU(),
+    nn.Conv2d(32, 64, 3, 1),
+    nn.ReLU(),
+    nn.MaxPool2d(2),
+    nn.Dropout(0.25),
+    nn.Flatten(),
+    nn.Dropout(0.5),
+    nn.Linear(9216, 128),
+    nn.ReLU(),
+    nn.Linear(128, 10),
+    nn.LogSoftmax(dim=1),
+)
+#+end_src
+
+* Training
+** Datasets
+A ~Dataset~ abstracts over files on disk
+#+begin_src jupyter-python
+from torch.utils.data import Dataset
+import pandas as pd
+
+
+class MyDataset(Dataset):
+    def __init__(self, csv_file):
+        self.data = pd.read_csv(csv_file)
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        if torch.is_tensor(idx):
+            idx = idx.tolist()
+
+        return torch.from_numpy(self.data.iloc[idx])
+#+end_src
+
+** PyTorch can load popular benchmarks
+
+#+begin_src jupyter-python
+from torchvision.datasets import FashionMNIST
+from torchvision.transforms import Compose, ToTensor, Normalize
+
+data_root = "~/data"
+transform = Compose([ToTensor(), Normalize((0.1307,), (0.3081,))])
+trainset = FashionMNIST(data_root, train=True, download=True, transform=transform)
+testset = FashionMNIST(data_root, train=False, transform=transform)
+#+end_src
+
+** Dataloaders
+A ~DataLoader~ lets us stream data from a dataset
+
+#+begin_src jupyter-python
+from torch.utils.data import DataLoader
+
+train_loader = DataLoader(trainset, batch_size=256, num_workers=8, pin_memory=True)
+test_loader = DataLoader(testset, batch_size=512, num_workers=8, pin_memory=True)
+
+x, y = next(iter(train_loader))
+print(x.shape, y.shape)
+#+end_src
+
+** Training loop
+- More low-level than ~.fit~
+#+begin_src jupyter-python
+from torch.optim import AdamW
+from torch.nn import functional as F
+from tqdm import tqdm
+
+device = "cpu" # set to "cuda" for GPU
+cnn = CNN().to(device)
+optimizer = AdamW(cnn.parameters(), lr=1e-3)
+iterator = tqdm(train_loader)
+for x, y in iterator:
+    x, y = x.to(device), y.to(device)
+    optimizer.zero_grad()
+    y_hat = cnn(x)
+    loss = F.cross_entropy(y_hat, y)
+    loss.backward()
+    optimizer.step()
+    iterator.set_postfix_str(f"Loss {loss:.4f}")
+#+end_src
+
+* PyTorch Lightning
+- PyTorch training offers a lot of control
+- But can lead to tedious boilerplate
+- [[https://www.pytorchlightning.ai/][PyTorch Lightning]] abstracts a lot of tedium
+- Gradient updates, multiple GPUs, logging, checkpointing, 16-bit precision...
+- Let us refactor the digit classifier in PyTorch Lightning
+
+* PyTorch Lightning code
+
+#+begin_src jupyter-python
+import pytorch_lightning as pl
+from pytorch_lightning.callbacks import ModelCheckpoint
+
+class CNNModel(pl.LightningModule):
+    def __init__(self):
+        super().__init__()
+        self.cnn = nn.Sequential(
+            nn.Conv2d(1, 32, 3, 1),
+            nn.ReLU(),
+            nn.Conv2d(32, 64, 3, 1),
+            nn.ReLU(),
+            nn.MaxPool2d(2),
+            nn.Dropout(0.25),
+            nn.Flatten(),
+            nn.Dropout(0.5),
+            nn.Linear(9216, 128),
+            nn.ReLU(),
+            nn.Linear(128, 10),
+            nn.LogSoftmax(dim=1),
+        )
+
+    def forward(self, x):
+        return self.cnn(x)
+
+    def training_step(self, batch, batch_idx):
+        x, y = batch
+        y_hat = self(x)
+        loss = F.cross_entropy(y_hat, y)
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        x, y = batch
+        y_hat = self(x)
+        loss = F.cross_entropy(y_hat, y)
+        return loss
+
+    def configure_optimizers(self):
+        return torch.optim.Adam(self.parameters(), lr=1e-3)
+
+
+model = CNNModel()
+checkpoint_callback = ModelCheckpoint(dirpath="checkpoints")
+trainer = pl.Trainer(callbacks=[checkpoint_callback])
+trainer.fit(model, train_loader, test_loader)
+#+end_src
+
+* Productionising
+** Export to TorchScript
+- TorchScript is a compiled version of our model
+- It can be loaded into other runtimes like C++ or Java
+#+name: store torch script model
+#+begin_src jupyter-python
+import os
+from pathlib import Path
+
+best_ckpt = checkpoint_callback.best_model_path
+best_cnn = CNNModel.load_from_checkpoint(best_ckpt)
+jit_model = torch.jit.script(best_cnn)
+jit_model_path = Path(os.path.dirname(best_ckpt), "jit_model.pt")
+jit_model.save(jit_model_path)
+loaded_jit_model = torch.jit.load(jit_model_path)
+print(loaded_jit_model)
+#+end_src
+
+** PyTorch serve
+- We can also deploy using [[https://github.com/pytorch/serve][PyTorch Serve]]
+
+#+name: archive model
+#+begin_src sh
+torch-model-archiver \
+    --model-name machin-lern \
+    --version 1.0 \
+    --serialized-file /home/sc/code/pytorch-whirlwind-tour/checkpoints/jit_model.pt \
+    --export-path model_store \
+    --handler handler
+#+end_src
+
+#+name: start torch serve
+#+begin_src sh
+torchserve --start --ncs --model-store model_store --models machin-lern
+#+end_src
+
+I have stored some imaged in advance to test the API with. We can get predictions
+
+[[./images/0.png]]
+[[./images/1.png]]
+[[./images/2.png]]
+
+#+name: predict api call
+#+begin_src sh
+curl http://localhost:8080/predictions/machin-lern -T images/0.png
+#+end_src
+
+We can also ge prediction explanations (integrated gradients using [[https://captum.ai/][Captum]])
+
+#+name: explain api call
+#+begin_src sh
+curl http://localhost:8080/explanations/machin-lern -T images/0.png
+#+end_src
+
+#+name: stop torch serve
+#+begin_src sh
+torchserve --stop
+#+end_src
+
+* Finishing thoughts
+- This has been a whirlwind tour of PyTorch
+- PyTorch is at its core an AD system
+- It comes with a "standard library" of NN abstractions
+- PyTorch Lightning automates a lot of useful tasks
+- It also has lets us compile and deploy models efficiently
