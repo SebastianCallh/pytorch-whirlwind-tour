@@ -17,7 +17,12 @@ w = torch.randn(3, requires_grad=True)
 y = torch.dot(x, w)
 y.backward()
 print(w.grad)
-#+
+#+end_src
+
+
+
+
+
 
 * Autograd
 - Autograd lets us write differentiable programs
@@ -60,6 +65,8 @@ class CNN(nn.Module):  # derive from module
         return output
 #+end_src
 
+#+RESULTS:
+
 * Alternative
 - For simple things the OOP approach is clunky.
 - We can be more concise
@@ -82,9 +89,12 @@ cnn = nn.Sequential(
 )
 #+end_src
 
+#+RESULTS:
+
 * Training
 ** Datasets
 A ~Dataset~ abstracts over files on disk
+
 #+begin_src jupyter-python
 from torch.utils.data import Dataset
 import pandas as pd
@@ -104,7 +114,9 @@ class MyDataset(Dataset):
         return torch.from_numpy(self.data.iloc[idx])
 #+end_src
 
-** PyTorch can load popular benchmarks
+#+RESULTS:
+
+** PyTorch can load popular datasets
 
 #+begin_src jupyter-python
 from torchvision.datasets import FashionMNIST
@@ -115,6 +127,8 @@ transform = Compose([ToTensor(), Normalize((0.1307,), (0.3081,))])
 trainset = FashionMNIST(data_root, train=True, download=True, transform=transform)
 testset = FashionMNIST(data_root, train=False, transform=transform)
 #+end_src
+
+#+RESULTS:
 
 ** Dataloaders
 A ~DataLoader~ lets us stream data from a dataset
@@ -129,15 +143,19 @@ x, y = next(iter(train_loader))
 print(x.shape, y.shape)
 #+end_src
 
+#+RESULTS:
+: torch.Size([256, 1, 28, 28]) torch.Size([256])
+
 ** Training loop
 - More low-level than ~.fit~
+
 #+begin_src jupyter-python
 from torch.optim import AdamW
 from torch.nn import functional as F
 from tqdm import tqdm
 
 device = "cpu" # set to "cuda" for GPU
-cnn = CNN().to(device)
+cnn = CNN().to(device).train() # explicitly set model to train mode
 optimizer = AdamW(cnn.parameters(), lr=1e-3)
 iterator = tqdm(train_loader)
 for x, y in iterator:
@@ -148,7 +166,13 @@ for x, y in iterator:
     loss.backward()
     optimizer.step()
     iterator.set_postfix_str(f"Loss {loss:.4f}")
+
+
+cnn = cnn.eval() # set to eval mode to disable dropout etc
 #+end_src
+
+#+RESULTS:
+: 100%|██████████| 235/235 [00:40<00:00,  5.84it/s, Loss 0.3435]
 
 * PyTorch Lightning
 - PyTorch training offers a lot of control
@@ -206,10 +230,12 @@ trainer = pl.Trainer(callbacks=[checkpoint_callback])
 trainer.fit(model, train_loader, test_loader)
 #+end_src
 
+
 * Productionising
 ** Export to TorchScript
 - TorchScript is a compiled version of our model
 - It can be loaded into other runtimes like C++ or Java
+
 #+name: store torch script model
 #+begin_src jupyter-python
 import os
@@ -230,17 +256,21 @@ print(loaded_jit_model)
 #+name: archive model
 #+begin_src sh
 torch-model-archiver \
-    --model-name machin-lern \
+    --model-name my-model \
     --version 1.0 \
     --serialized-file /home/sc/code/pytorch-whirlwind-tour/checkpoints/jit_model.pt \
     --export-path model_store \
-    --handler handler
+    --handler handler \
+    --force
 #+end_src
+
 
 #+name: start torch serve
 #+begin_src sh
-torchserve --start --ncs --model-store model_store --models machin-lern
+torchserve --start --ncs --model-store model_store --models my-model.mar
 #+end_src
+
+#+RESULTS: start torch serve
 
 I have stored some imaged in advance to test the API with. We can get predictions
 
@@ -250,14 +280,14 @@ I have stored some imaged in advance to test the API with. We can get prediction
 
 #+name: predict api call
 #+begin_src sh
-curl http://localhost:8080/predictions/machin-lern -T images/0.png
+curl http://localhost:8080/predictions/my-model -T images/3.png
 #+end_src
 
 We can also ge prediction explanations (integrated gradients using [[https://captum.ai/][Captum]])
 
 #+name: explain api call
 #+begin_src sh
-curl http://localhost:8080/explanations/machin-lern -T images/0.png
+curl http://localhost:8080/explanations/my-model -T images/0.png
 #+end_src
 
 #+name: stop torch serve
